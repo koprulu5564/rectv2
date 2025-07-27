@@ -6,7 +6,9 @@ on:
     - cron: '0 0 * * *' # Her gün saat 00:00'da çalışır
 
 env:
-  GITHUB_API_URL: "https://raw.githubusercontent.com/kerimmkirac/cs-kerim/dd1f10588d5d40f738f9e14fadd3e606ded7cb1c/RecTV/src/main/kotlin/com/keyiflerolsun/RecTV.kt"
+  MAIN_URL: "https://m.prectv50.sbs"
+  SW_KEY: "4F5A9C3D9A86FA54EACEDDD635185/c3c5bd17-e37b-4b94-a944-8a3688a30452"
+  MAX_PAGES: 3 # Canlı, film ve diziler için maksimum sayfa sayısı
 
 jobs:
   generate-m3u:
@@ -24,7 +26,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install requests
+        pip install requests tqdm
         
     - name: Generate M3U playlist
       run: |
@@ -32,139 +34,173 @@ jobs:
         import requests
         import datetime
         import os
-        import re
-        
-        def get_current_api_url():
-            """GitHub'dan güncel API URL'sini al"""
-            try:
-                response = requests.get(
-                    os.environ.get('GITHUB_API_URL'),
-                    timeout=10
-                )
-                response.raise_for_status()
-                
-                # Kotlin dosyasından mainUrl'yi regex ile bul
-                match = re.search(r'mainUrl\s*=\s*"([^"]+)"', response.text)
-                if match:
-                    return match.group(1)
-                return "https://m.prectv50.sbs"  # fallback URL
-            except:
-                return "https://m.prectv50.sbs"  # fallback URL
-        
-        def test_api_url(url):
-            """API URL'sinin çalışıp çalışmadığını test et"""
-            try:
-                response = requests.get(f"{url}/categories", timeout=10)
-                return response.status_code == 200
-            except:
-                return False
-        
-        def get_active_api_url():
-            """Çalışan API URL'sini belirle"""
-            current_url = get_current_api_url()
-            if test_api_url(current_url):
-                return current_url
-            
-            # Fallback URL'yi dene
-            fallback_url = "https://m.prectv50.sbs"
-            if test_api_url(fallback_url):
-                return fallback_url
-            
-            raise Exception("No working API URL found")
-        
-        BASE_URL = get_active_api_url()
-        print(f"Using API URL: {BASE_URL}")
+        from tqdm import tqdm
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # Configuration
+        MAIN_URL = os.environ.get('MAIN_URL')
+        SW_KEY = os.environ.get('SW_KEY')
+        MAX_PAGES = int(os.environ.get('MAX_PAGES', 3))
         
         HEADERS = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json"
+            "User-Agent": "okhttp/4.12.0",
+            "Referer": "https://twitter.com/"
         }
-        
-        def get_categories():
-            """Tüm kategorileri getir"""
+
+        def fetch_url(url):
+            """URL'den veri çekme fonksiyonu"""
             try:
-                response = requests.get(
-                    f"{BASE_URL}/categories",
-                    headers=HEADERS,
-                    timeout=10
-                )
+                response = requests.get(url, headers=HEADERS, timeout=10)
                 response.raise_for_status()
-                return response.json().get('data', [])
+                return response.json()
             except Exception as e:
-                print(f"Error getting categories: {e}")
-                return []
-        
-        def get_category_contents(category_id):
-            """Kategori içeriklerini getir"""
-            try:
-                response = requests.get(
-                    f"{BASE_URL}/categories/{category_id}/contents",
-                    headers=HEADERS,
-                    timeout=10
-                )
-                response.raise_for_status()
-                return response.json().get('data', [])
-            except Exception as e:
-                print(f"Error getting contents for category {category_id}: {e}")
-                return []
-        
+                print(f"Error fetching {url}: {e}")
+                return None
+
+        def get_live_channels():
+            """Canlı yayınları getir"""
+            print("\nFetching live channels...")
+            all_channels = []
+            
+            with ThreadPoolExecutor() as executor:
+                futures = []
+                for page in range(MAX_PAGES):
+                    url = f"{MAIN_URL}/api/channel/by/filtres/0/0/{page}/{SW_KEY}/"
+                    futures.append(executor.submit(fetch_url, url))
+                
+                for future in tqdm(as_completed(futures), total=MAX_PAGES, desc="Live Pages"):
+                    data = future.result()
+                    if data and isinstance(data, list):
+                        all_channels.extend(data)
+            
+            return all_channels
+
+        def get_movies(category_id=0, category_name="Son Filmler"):
+            """Filmleri getir"""
+            print(f"\nFetching {category_name}...")
+            all_movies = []
+            
+            with ThreadPoolExecutor() as executor:
+                futures = []
+                for page in range(MAX_PAGES):
+                    url = f"{MAIN_URL}/api/movie/by/filtres/{category_id}/created/{page}/{SW_KEY}/"
+                    futures.append(executor.submit(fetch_url, url))
+                
+                for future in tqdm(as_completed(futures), total=MAX_PAGES, desc=f"{category_name} Pages"):
+                    data = future.result()
+                    if data and isinstance(data, list):
+                        all_movies.extend(data)
+            
+            return all_movies
+
+        def get_series():
+            """Dizileri getir"""
+            print("\nFetching series...")
+            all_series = []
+            
+            with ThreadPoolExecutor() as executor:
+                futures = []
+                for page in range(MAX_PAGES):
+                    url = f"{MAIN_URL}/api/serie/by/filtres/0/created/{page}/{SW_KEY}/"
+                    futures.append(executor.submit(fetch_url, url))
+                
+                for future in tqdm(as_completed(futures), total=MAX_PAGES, desc="Series Pages"):
+                    data = future.result()
+                    if data and isinstance(data, list):
+                        all_series.extend(data)
+            
+            return all_series
+
         def generate_m3u_playlist():
             """M3U playlist dosyası oluştur"""
-            print("Fetching categories...")
-            categories = get_categories()
-            
-            if not categories:
-                print("No categories found or error occurred")
-                return
-            
-            print(f"Found {len(categories)} categories, generating playlist...")
+            print("Starting playlist generation...")
             
             with open("playlist.m3u", "w", encoding="utf-8") as f:
                 # M3U başlık bilgisi
                 f.write("#EXTM3U\n")
                 f.write(f"# Generated at: {datetime.datetime.now()}\n")
-                f.write(f"# API Source: {BASE_URL}\n\n")
+                f.write(f"# API Source: {MAIN_URL}\n\n")
                 
-                total_contents = 0
-                
-                for category in categories:
-                    if not isinstance(category, dict):
-                        continue
-                        
-                    # Kategori bilgileri
-                    category_id = category.get('id', '')
-                    category_name = category.get('name', 'Unknown Category')
-                    category_image = category.get('image', '')
-                    
-                    # Kategori başlığı
-                    f.write(f'#EXTINF:-1 tvg-id="{category_id}" tvg-name="{category_name}" tvg-logo="{category_image}" group-title="Categories",{category_name}\n')
-                    f.write(f"#EXTVLCOPT:http-user-agent=Mozilla/5.0\n\n")
-                    
-                    # Kategori içerikleri
-                    print(f"Fetching contents for category: {category_name}...")
-                    contents = get_category_contents(category_id)
-                    
-                    if not contents:
-                        continue
-                    
-                    for content in contents:
-                        if not isinstance(content, dict):
+                # Canlı yayınlar
+                live_channels = get_live_channels()
+                if live_channels:
+                    f.write("#EXTINF:-1 group-title=\"Canlı Yayınlar\",Canlı Yayınlar\n")
+                    for channel in live_channels:
+                        if not channel.get('sources'):
                             continue
                             
-                        content_id = content.get('id', '')
-                        content_name = content.get('name', 'Unknown Content')
-                        content_image = content.get('image', '')
-                        content_url = content.get('url', '')
+                        channel_name = channel.get('title', 'Unknown Channel')
+                        channel_image = channel.get('image', '')
+                        channel_url = channel['sources'][0].get('url', '')
                         
-                        if content_url:
-                            f.write(f'#EXTINF:-1 tvg-id="{content_id}" tvg-name="{content_name}" tvg-logo="{content_image}" group-title="{category_name}",{content_name}\n')
-                            f.write(f"{content_url}\n\n")
-                            total_contents += 1
-                    
-                    f.write("\n")
+                        if channel_url:
+                            f.write(f'#EXTINF:-1 tvg-id="{channel.get("id", "")}" tvg-name="{channel_name}" tvg-logo="{channel_image}" group-title="Canlı Yayınlar",{channel_name}\n')
+                            f.write(f"{channel_url}\n\n")
                 
-                print(f"Playlist generated with {total_contents} contents across {len(categories)} categories")
-        
+                # Film kategorileri
+                movie_categories = [
+                    (0, "Son Filmler"),
+                    (14, "Aile"),
+                    (1, "Aksiyon"),
+                    (13, "Animasyon"),
+                    (19, "Belgesel"),
+                    (4, "Bilim Kurgu"),
+                    (2, "Dram"),
+                    (10, "Fantastik"),
+                    (3, "Komedi"),
+                    (8, "Korku"),
+                    (17, "Macera"),
+                    (5, "Romantik")
+                ]
+                
+                for cat_id, cat_name in movie_categories:
+                    movies = get_movies(cat_id, cat_name)
+                    if movies:
+                        f.write(f"#EXTINF:-1 group-title=\"Filmler - {cat_name}\",{cat_name}\n")
+                        for movie in movies:
+                            if not movie.get('sources'):
+                                continue
+                                
+                            movie_name = movie.get('title', 'Unknown Movie')
+                            movie_image = movie.get('image', '')
+                            movie_url = movie['sources'][0].get('url', '')
+                            
+                            if movie_url:
+                                f.write(f'#EXTINF:-1 tvg-id="{movie.get("id", "")}" tvg-name="{movie_name}" tvg-logo="{movie_image}" group-title="Filmler - {cat_name}",{movie_name}\n')
+                                f.write(f"{movie_url}\n\n")
+                
+                # Diziler
+                series = get_series()
+                if series:
+                    f.write("#EXTINF:-1 group-title=\"Diziler\",Diziler\n")
+                    for serie in series:
+                        if not serie.get('id'):
+                            continue
+                            
+                        serie_name = serie.get('title', 'Unknown Serie')
+                        serie_image = serie.get('image', '')
+                        
+                        # Dizi bölümlerini getir
+                        seasons_url = f"{MAIN_URL}/api/season/by/serie/{serie['id']}/{SW_KEY}/"
+                        seasons_data = fetch_url(seasons_url)
+                        
+                        if seasons_data and isinstance(seasons_data, list):
+                            for season in seasons_data:
+                                if not season.get('episodes'):
+                                    continue
+                                    
+                                for episode in season['episodes']:
+                                    if not episode.get('sources'):
+                                        continue
+                                        
+                                    episode_url = episode['sources'][0].get('url', '')
+                                    if episode_url:
+                                        episode_name = f"{serie_name} - {episode.get('title', 'Unknown Episode')}"
+                                        f.write(f'#EXTINF:-1 tvg-id="{episode.get("id", "")}" tvg-name="{episode_name}" tvg-logo="{serie_image}" group-title="Diziler",{episode_name}\n')
+                                        f.write(f"{episode_url}\n\n")
+            
+            print("\nPlaylist generation completed successfully!")
+
         if __name__ == "__main__":
             generate_m3u_playlist()
         EOF
