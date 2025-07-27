@@ -55,88 +55,113 @@ jobs:
                 print(f"Error fetching {url}: {e}")
                 return None
 
-        def get_all_paginated_data(base_url, category_name):
+        def get_all_pages(base_url, category_name):
             print(f"\nFetching {category_name}...")
-            all_data = []
+            all_items = []
             page = 0
-            empty_pages = 0
             
             with tqdm(desc=category_name) as pbar:
-                while empty_pages < 2:  # 2 boş sayfa ardışık gelirse dur
+                while True:
                     url = f"{base_url}{page}/{SW_KEY}/"
                     data = fetch_url(url)
                     
                     if not data or not isinstance(data, list):
-                        empty_pages += 1
-                        page += 1
-                        pbar.update(1)
-                        continue
+                        break
                         
                     if len(data) == 0:
-                        empty_pages += 1
-                    else:
-                        empty_pages = 0
-                        all_data.extend(data)
-                    
+                        break
+                        
+                    all_items.extend(data)
                     page += 1
                     pbar.update(1)
-                    pbar.set_postfix({'Page': page, 'Items': len(all_data)})
+                    pbar.set_postfix({'Page': page, 'Items': len(all_items)})
             
-            print(f"Found {len(all_data)} items for {category_name}")
-            return all_data
+            print(f"Total {len(all_items)} items found for {category_name}")
+            return all_items
 
-        def get_live_channels_with_categories():
-            print("\nFetching live channels with categories...")
-            base_url = f"{MAIN_URL}/api/channel/by/filtres/0/0/"
-            channels = get_all_paginated_data(base_url, "Canlı Yayınlar")
-            
-            # API'den gelen kategori bilgilerini kullan
-            categories = {}
-            for channel in channels:
-                if not isinstance(channel, dict):
-                    continue
-                    
-                # Kanalın kendi kategori bilgisini kullan
-                channel_category = channel.get('category', 'Diğer Kanallar')
-                if channel_category not in categories:
-                    categories[channel_category] = []
-                
-                categories[channel_category].append(channel)
-            
-            return categories
-
-        def get_content_with_categories(content_type):
-            categories = {
-                "movie": "Filmler",
-                "serie": "Diziler"
+        def get_live_channels():
+            live_categories = {
+                "Ulusal Kanallar": "${mainUrl}/api/channel/by/filtres/1/0/SAYFA/${swKey}/",
+                "Spor Kanalları": "${mainUrl}/api/channel/by/filtres/2/0/SAYFA/${swKey}/",
+                "Haber Kanalları": "${mainUrl}/api/channel/by/filtres/3/0/SAYFA/${swKey}/",
+                "Müzik Kanalları": "${mainUrl}/api/channel/by/filtres/4/0/SAYFA/${swKey}/",
+                "Sinema Kanalları": "${mainUrl}/api/channel/by/filtres/5/0/SAYFA/${swKey}/",
+                "Belgesel Kanalları": "${mainUrl}/api/channel/by/filtres/6/0/SAYFA/${swKey}/",
+                "Çocuk Kanalları": "${mainUrl}/api/channel/by/filtres/7/0/SAYFA/${swKey}/",
+                "Yerel Kanallar": "${mainUrl}/api/channel/by/filtres/8/0/SAYFA/${swKey}/"
             }
-            print(f"\nFetching {categories[content_type]} with categories...")
             
-            # Önce tüm içerikleri al
-            base_url = f"{MAIN_URL}/api/{content_type}/by/filtres/0/created/"
-            all_content = get_all_paginated_data(base_url, categories[content_type])
-            
-            # Kategorilere ayır
-            categorized = {}
-            for item in all_content:
-                if not isinstance(item, dict):
-                    continue
-                    
-                # İçeriğin kendi kategori bilgisini kullan
-                item_category = item.get('category', 'Genel')
-                if item_category not in categorized:
-                    categorized[item_category] = []
+            results = {}
+            with ThreadPoolExecutor() as executor:
+                futures = []
+                for cat_name, url_template in live_categories.items():
+                    url = url_template.replace("${mainUrl}", MAIN_URL).replace("${swKey}", SW_KEY).replace("SAYFA", "0")
+                    base_url = url.rsplit('/', 2)[0] + "/"  # Sayfa numarası ve SW_KEY'den önceki kısım
+                    futures.append(executor.submit(get_all_pages, base_url, f"CANLI - {cat_name}"))
                 
-                categorized[item_category].append(item)
+                for future, cat_name in zip(as_completed(futures), live_categories.keys()):
+                    results[cat_name] = future.result()
             
-            return categorized
+            return results
 
-        def get_series_episodes(series_id):
+        def get_movies():
+            movie_categories = [
+                (0, "Son Eklenen Filmler"),
+                (14, "Aile Filmleri"),
+                (1, "Aksiyon Filmleri"),
+                (13, "Animasyon Filmleri"),
+                (19, "Belgeseller"),
+                (4, "Bilim Kurgu Filmleri"),
+                (2, "Dram Filmleri"),
+                (10, "Fantastik Filmleri"),
+                (3, "Komedi Filmleri"),
+                (8, "Korku Filmleri"),
+                (17, "Macera Filmleri"),
+                (5, "Romantik Filmleri")
+            ]
+            
+            results = {}
+            with ThreadPoolExecutor() as executor:
+                futures = []
+                for cat_id, cat_name in movie_categories:
+                    base_url = f"{MAIN_URL}/api/movie/by/filtres/{cat_id}/created/"
+                    futures.append(executor.submit(get_all_pages, base_url, f"FİLM - {cat_name}"))
+                
+                for future, (cat_id, cat_name) in zip(as_completed(futures), movie_categories):
+                    results[cat_name] = future.result()
+            
+            return results
+
+        def get_series():
+            series_categories = [
+                (0, "Son Eklenen Diziler"),
+                (1, "Aksiyon Dizileri"),
+                (2, "Dram Dizileri"),
+                (3, "Komedi Dizileri"),
+                (4, "Bilim Kurgu Dizileri"),
+                (5, "Polisiye Dizileri"),
+                (6, "Romantik Dizileri"),
+                (7, "Tarihi Dizileri")
+            ]
+            
+            results = {}
+            with ThreadPoolExecutor() as executor:
+                futures = []
+                for cat_id, cat_name in series_categories:
+                    base_url = f"{MAIN_URL}/api/serie/by/filtres/{cat_id}/created/"
+                    futures.append(executor.submit(get_all_pages, base_url, f"DİZİ - {cat_name}"))
+                
+                for future, (cat_id, cat_name) in zip(as_completed(futures), series_categories):
+                    results[cat_name] = future.result()
+            
+            return results
+
+        def get_episodes(series_id):
             url = f"{MAIN_URL}/api/season/by/serie/{series_id}/{SW_KEY}/"
             data = fetch_url(url)
             return data if isinstance(data, list) else []
 
-        def generate_m3u_playlist():
+        def generate_m3u():
             print("\nStarting playlist generation...")
             
             with open("playlist.m3u", "w", encoding="utf-8") as f:
@@ -144,95 +169,95 @@ jobs:
                 f.write(f"# Generated at: {datetime.datetime.now()}\n")
                 f.write(f"# API Source: {MAIN_URL}\n\n")
                 
-                # 1. CANLI YAYINLAR (API'den gelen kategorilere göre)
+                # 1. CANLI YAYINLAR
                 print("\nProcessing Live Channels...")
-                live_categories = get_live_channels_with_categories()
-                for category_name, channels in live_categories.items():
+                live_data = get_live_channels()
+                for category, channels in live_data.items():
                     if not channels:
                         continue
-                        
-                    f.write(f'#EXTINF:-1 group-title="CANLI - {category_name}",{category_name}\n')
+                    
+                    f.write(f'#EXTINF:-1 group-title="CANLI - {category}",{category}\n')
                     for channel in channels:
-                        if not channel.get('sources'):
+                        if not isinstance(channel, dict) or not channel.get('sources'):
                             continue
                             
-                        channel_name = channel.get('title', 'Unknown Channel')
-                        channel_image = channel.get('image', '')
-                        channel_url = channel['sources'][0].get('url', '')
+                        name = channel.get('title', 'Unknown')
+                        image = channel.get('image', '')
+                        url = channel['sources'][0].get('url', '')
                         
-                        if channel_url:
-                            f.write(f'#EXTINF:-1 tvg-id="{channel.get("id", "")}" tvg-name="{channel_name}" tvg-logo="{channel_image}" group-title="CANLI - {category_name}",{channel_name}\n')
+                        if url:
+                            f.write(f'#EXTINF:-1 tvg-id="{channel.get("id", "")}" tvg-name="{name}" tvg-logo="{image}" group-title="CANLI - {category}",{name}\n')
                             f.write(f'#EXTVLCOPT:http-user-agent=googleusercontent\n')
                             f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
-                            f.write(f"{channel_url}\n\n")
+                            f.write(f"{url}\n\n")
                 
-                # 2. FİLMLER (API'den gelen kategorilere göre)
+                # 2. FİLMLER
                 print("\nProcessing Movies...")
-                movies_by_category = get_content_with_categories("movie")
-                for category_name, movies in movies_by_category.items():
+                movie_data = get_movies()
+                for category, movies in movie_data.items():
                     if not movies:
                         continue
-                        
-                    f.write(f'#EXTINF:-1 group-title="FİLMLER - {category_name}",{category_name}\n')
+                    
+                    f.write(f'#EXTINF:-1 group-title="FİLMLER - {category}",{category}\n')
                     for movie in movies:
-                        if not movie.get('sources'):
+                        if not isinstance(movie, dict) or not movie.get('sources'):
                             continue
                             
-                        movie_name = movie.get('title', 'Unknown Movie')
-                        movie_image = movie.get('image', '')
-                        movie_url = movie['sources'][0].get('url', '')
+                        name = movie.get('title', 'Unknown')
+                        image = movie.get('image', '')
+                        url = movie['sources'][0].get('url', '')
                         
-                        if movie_url:
-                            f.write(f'#EXTINF:-1 tvg-id="{movie.get("id", "")}" tvg-name="{movie_name}" tvg-logo="{movie_image}" group-title="FİLMLER - {category_name}",{movie_name}\n')
+                        if url:
+                            f.write(f'#EXTINF:-1 tvg-id="{movie.get("id", "")}" tvg-name="{name}" tvg-logo="{image}" group-title="FİLMLER - {category}",{name}\n')
                             f.write(f'#EXTVLCOPT:http-user-agent=googleusercontent\n')
                             f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
-                            f.write(f"{movie_url}\n\n")
+                            f.write(f"{url}\n\n")
                 
-                # 3. DİZİLER (API'den gelen kategorilere göre)
+                # 3. DİZİLER
                 print("\nProcessing Series...")
-                series_by_category = get_content_with_categories("serie")
-                for category_name, series in series_by_category.items():
+                series_data = get_series()
+                for category, series in series_data.items():
                     if not series:
                         continue
                     
-                    f.write(f'#EXTINF:-1 group-title="DİZİLER - {category_name}",{category_name}\n')
+                    f.write(f'#EXTINF:-1 group-title="DİZİLER - {category}",{category}\n')
                     
-                    with ThreadPoolExecutor(max_workers=5) as executor:
+                    with ThreadPoolExecutor() as executor:
                         futures = []
                         for serie in series:
-                            if not serie.get('id'):
+                            if not isinstance(serie, dict) or not serie.get('id'):
                                 continue
                                 
-                            futures.append(executor.submit(get_series_episodes, serie['id']))
+                            futures.append(executor.submit(get_episodes, serie['id']))
                         
                         for future, serie in zip(as_completed(futures), series):
                             episodes = future.result()
                             if not episodes:
                                 continue
                                 
-                            serie_name = serie.get('title', 'Unknown Serie')
+                            serie_name = serie.get('title', 'Unknown')
                             serie_image = serie.get('image', '')
                             
                             for season in episodes:
-                                if not season.get('episodes'):
+                                if not isinstance(season, dict) or not season.get('episodes'):
                                     continue
                                     
                                 for episode in season['episodes']:
-                                    if not episode.get('sources'):
+                                    if not isinstance(episode, dict) or not episode.get('sources'):
                                         continue
                                         
-                                    episode_url = episode['sources'][0].get('url', '')
-                                    if episode_url:
-                                        episode_name = f"{serie_name} - {episode.get('title', 'Bölüm')}"
-                                        f.write(f'#EXTINF:-1 tvg-id="{episode.get("id", "")}" tvg-name="{episode_name}" tvg-logo="{serie_image}" group-title="DİZİLER - {category_name}",{episode_name}\n')
+                                    url = episode['sources'][0].get('url', '')
+                                    if url:
+                                        ep_name = f"{serie_name} - {episode.get('title', 'Bölüm')}"
+                                        f.write(f'#EXTINF:-1 tvg-id="{episode.get("id", "")}" tvg-name="{ep_name}" tvg-logo="{serie_image}" group-title="DİZİLER - {category}",{ep_name}\n')
                                         f.write(f'#EXTVLCOPT:http-user-agent=googleusercontent\n')
                                         f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
-                                        f.write(f"{episode_url}\n\n")
+                                        f.write(f"{url}\n\n")
             
             print("\nPlaylist generation completed successfully!")
 
         if __name__ == "__main__":
-            generate_m3u_playlist()
+            generate_m3u()
         EOF
         
         python generate_playlist.py
