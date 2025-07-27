@@ -1,0 +1,86 @@
+name: Generate and Update M3U Playlist
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *' # Her gün saat 00:00'da çalışır
+
+jobs:
+  generate-m3u:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests
+        
+    - name: Generate M3U playlist
+      run: |
+        cat << 'EOF' > generate_playlist.py
+        import requests
+        import datetime
+        
+        # API base URL
+        BASE_URL = "https://api.example.com"  # API URL'sini buraya girin
+        
+        def get_categories():
+            """Tüm kategorileri getir"""
+            response = requests.get(f"{BASE_URL}/categories")
+            return response.json()
+        
+        def get_category_contents(category_id):
+            """Kategori içeriklerini getir"""
+            response = requests.get(f"{BASE_URL}/categories/{category_id}/contents")
+            return response.json()
+        
+        def generate_m3u_playlist():
+            """M3U playlist dosyası oluştur"""
+            categories = get_categories()
+            
+            with open("playlist.m3u", "w", encoding="utf-8") as f:
+                # M3U başlık bilgisi
+                f.write("#EXTM3U\n")
+                f.write(f"# Generated at: {datetime.datetime.now()}\n\n")
+                
+                for category in categories:
+                    # Kategori bilgileri
+                    category_name = category.get('name', 'Unknown Category')
+                    category_image = category.get('image', '')
+                    
+                    # Kategori başlığı
+                    f.write(f'#EXTINF:-1 tvg-id="{category["id"]}" tvg-name="{category_name}" tvg-logo="{category_image}" group-title="Categories",{category_name}\n')
+                    f.write(f"#EXTVLCOPT:http-user-agent=Mozilla/5.0\n\n")
+                    
+                    # Kategori içerikleri
+                    contents = get_category_contents(category["id"])
+                    for content in contents:
+                        content_name = content.get('name', 'Unknown Content')
+                        content_image = content.get('image', '')
+                        content_url = content.get('url', '')
+                        
+                        if content_url:
+                            f.write(f'#EXTINF:-1 tvg-id="{content["id"]}" tvg-name="{content_name}" tvg-logo="{content_image}" group-title="{category_name}",{content_name}\n')
+                            f.write(f"{content_url}\n\n")
+        
+        if __name__ == "__main__":
+            generate_m3u_playlist()
+        EOF
+        
+        python generate_playlist.py
+        
+    - name: Commit and push changes
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        git add playlist.m3u
+        git commit -m "Update M3U playlist [auto]"
+        git push
