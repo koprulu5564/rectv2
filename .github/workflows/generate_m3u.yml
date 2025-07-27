@@ -8,7 +8,6 @@ on:
 env:
   MAIN_URL: "https://m.prectv50.sbs"
   SW_KEY: "4F5A9C3D9A86FA54EACEDDD635185/c3c5bd17-e37b-4b94-a944-8a3688a30452"
-  MAX_PAGES: 3 # Canlı, film ve diziler için maksimum sayfa sayısı
 
 jobs:
   generate-m3u:
@@ -40,7 +39,6 @@ jobs:
         # Configuration
         MAIN_URL = os.environ.get('MAIN_URL')
         SW_KEY = os.environ.get('SW_KEY')
-        MAX_PAGES = int(os.environ.get('MAX_PAGES', 3))
         
         HEADERS = {
             "User-Agent": "okhttp/4.12.0",
@@ -51,65 +49,144 @@ jobs:
             """URL'den veri çekme fonksiyonu"""
             try:
                 response = requests.get(url, headers=HEADERS, timeout=10)
+                if response.status_code == 404:
+                    return None
                 response.raise_for_status()
                 return response.json()
             except Exception as e:
                 print(f"Error fetching {url}: {e}")
                 return None
 
-        def get_live_channels():
-            """Canlı yayınları getir"""
-            print("\nFetching live channels...")
-            all_channels = []
-            
-            with ThreadPoolExecutor() as executor:
-                futures = []
-                for page in range(MAX_PAGES):
-                    url = f"{MAIN_URL}/api/channel/by/filtres/0/0/{page}/{SW_KEY}/"
-                    futures.append(executor.submit(fetch_url, url))
-                
-                for future in tqdm(as_completed(futures), total=MAX_PAGES, desc="Live Pages"):
-                    data = future.result()
-                    if data and isinstance(data, list):
-                        all_channels.extend(data)
-            
-            return all_channels
-
-        def get_movies(category_id=0, category_name="Son Filmler"):
-            """Filmleri getir"""
+        def get_all_paginated_data(base_url, category_name):
+            """Tüm sayfaları tarayarak veri toplar"""
             print(f"\nFetching {category_name}...")
-            all_movies = []
+            all_data = []
+            page = 0
+            
+            with tqdm(desc=category_name) as pbar:
+                while True:
+                    url = base_url.replace("SAYFA", str(page))
+                    data = fetch_url(url)
+                    
+                    if not data or not isinstance(data, list) or len(data) == 0:
+                        break
+                        
+                    all_data.extend(data)
+                    page += 1
+                    pbar.update(1)
+                    
+                    # API'yi aşırı yüklememek için küçük bir bekleme
+                    # time.sleep(0.1)
+            
+            return all_data
+
+        def get_live_categories():
+            """Canlı yayın kategorilerini getir"""
+            print("\nFetching live categories...")
+            categories = {
+                "Ulusal Kanallar": [],
+                "Spor Kanalları": [],
+                "Sinema Kanalları": [],
+                "Belgesel Kanalları": [],
+                "Haber Kanalları": [],
+                "Müzik Kanalları": [],
+                "Yerel Kanallar": [],
+                "Çocuk Kanalları": []
+            }
+            
+            # Tüm canlı yayınları getir
+            base_url = f"{MAIN_URL}/api/channel/by/filtres/0/0/SAYFA/{SW_KEY}/"
+            all_channels = get_all_paginated_data(base_url, "Canlı Yayınlar")
+            
+            # Kanal isimlerine göre kategorize et
+            for channel in all_channels:
+                if not channel.get('title') or not channel.get('sources'):
+                    continue
+                    
+                channel_name = channel['title']
+                channel_group = "Diğer Kanallar"
+                
+                # Kanal adına göre kategori belirle
+                if any(keyword in channel_name for keyword in ["TRT", "ATV", "FOX", "Kanal D", "Show TV", "Star", "TV8"]):
+                    channel_group = "Ulusal Kanallar"
+                elif any(keyword in channel_name for keyword in ["Spor", "GS TV", "FB TV", "BJK TV"]):
+                    channel_group = "Spor Kanalları"
+                elif any(keyword in channel_name for keyword in ["Sinema", "Film", "Dizi"]):
+                    channel_group = "Sinema Kanalları"
+                elif any(keyword in channel_name for keyword in ["Belgesel", "Nat Geo", "Discovery"]):
+                    channel_group = "Belgesel Kanalları"
+                elif any(keyword in channel_name for keyword in ["Haber", "CNN", "NTV", "HaberTürk"]):
+                    channel_group = "Haber Kanalları"
+                elif any(keyword in channel_name for keyword in ["Müzik", "Kral", "Power", "Number One"]):
+                    channel_group = "Müzik Kanalları"
+                elif any(keyword in channel_name for keyword in ["Çocuk", "Cartoon", "Minika"]):
+                    channel_group = "Çocuk Kanalları"
+                
+                categories[channel_group].append(channel)
+            
+            return categories
+
+        def get_movies_by_category():
+            """Filmleri kategorilerine göre getir"""
+            movie_categories = [
+                (0, "Son Eklenen Filmler"),
+                (14, "Aile Filmleri"),
+                (1, "Aksiyon Filmleri"),
+                (13, "Animasyon Filmleri"),
+                (19, "Belgeseller"),
+                (4, "Bilim Kurgu Filmleri"),
+                (2, "Dram Filmleri"),
+                (10, "Fantastik Filmleri"),
+                (3, "Komedi Filmleri"),
+                (8, "Korku Filmleri"),
+                (17, "Macera Filmleri"),
+                (5, "Romantik Filmleri")
+            ]
+            
+            all_movies = {}
             
             with ThreadPoolExecutor() as executor:
                 futures = []
-                for page in range(MAX_PAGES):
-                    url = f"{MAIN_URL}/api/movie/by/filtres/{category_id}/created/{page}/{SW_KEY}/"
-                    futures.append(executor.submit(fetch_url, url))
+                for cat_id, cat_name in movie_categories:
+                    base_url = f"{MAIN_URL}/api/movie/by/filtres/{cat_id}/created/SAYFA/{SW_KEY}/"
+                    futures.append(executor.submit(get_all_paginated_data, base_url, cat_name))
                 
-                for future in tqdm(as_completed(futures), total=MAX_PAGES, desc=f"{category_name} Pages"):
-                    data = future.result()
-                    if data and isinstance(data, list):
-                        all_movies.extend(data)
+                for future, (cat_id, cat_name) in zip(as_completed(futures), movie_categories):
+                    all_movies[cat_name] = future.result()
             
             return all_movies
 
-        def get_series():
-            """Dizileri getir"""
-            print("\nFetching series...")
-            all_series = []
+        def get_series_by_category():
+            """Dizileri kategorilerine göre getir"""
+            series_categories = [
+                (0, "Son Eklenen Diziler"),
+                (1, "Aksiyon Dizileri"),
+                (2, "Dram Dizileri"),
+                (3, "Komedi Dizileri"),
+                (4, "Bilim Kurgu Dizileri"),
+                (5, "Polisiye Dizileri"),
+                (6, "Romantik Dizileri"),
+                (7, "Tarihi Dizileri")
+            ]
+            
+            all_series = {}
             
             with ThreadPoolExecutor() as executor:
                 futures = []
-                for page in range(MAX_PAGES):
-                    url = f"{MAIN_URL}/api/serie/by/filtres/0/created/{page}/{SW_KEY}/"
-                    futures.append(executor.submit(fetch_url, url))
+                for cat_id, cat_name in series_categories:
+                    base_url = f"{MAIN_URL}/api/serie/by/filtres/{cat_id}/created/SAYFA/{SW_KEY}/"
+                    futures.append(executor.submit(get_all_paginated_data, base_url, cat_name))
                 
-                for future in tqdm(as_completed(futures), total=MAX_PAGES, desc="Series Pages"):
-                    data = future.result()
-                    if data and isinstance(data, list):
-                        all_series.extend(data)
+                for future, (cat_id, cat_name) in zip(as_completed(futures), series_categories):
+                    all_series[cat_name] = future.result()
             
             return all_series
+
+        def get_series_episodes(series_id):
+            """Dizi bölümlerini getir"""
+            url = f"{MAIN_URL}/api/season/by/serie/{series_id}/{SW_KEY}/"
+            data = fetch_url(url)
+            return data if isinstance(data, list) else []
 
         def generate_m3u_playlist():
             """M3U playlist dosyası oluştur"""
@@ -121,71 +198,66 @@ jobs:
                 f.write(f"# Generated at: {datetime.datetime.now()}\n")
                 f.write(f"# API Source: {MAIN_URL}\n\n")
                 
-                # Canlı yayınlar
-                live_channels = get_live_channels()
-                if live_channels:
-                    f.write("#EXTINF:-1 group-title=\"Canlı Yayınlar\",Canlı Yayınlar\n")
-                    for channel in live_channels:
-                        if not channel.get('sources'):
-                            continue
-                            
-                        channel_name = channel.get('title', 'Unknown Channel')
+                # 1. CANLI YAYINLAR (Kategorilere ayrılmış)
+                live_categories = get_live_categories()
+                for category_name, channels in live_categories.items():
+                    if not channels:
+                        continue
+                        
+                    f.write(f'#EXTINF:-1 group-title="CANLI - {category_name}",{category_name}\n')
+                    for channel in channels:
+                        channel_name = channel['title']
                         channel_image = channel.get('image', '')
                         channel_url = channel['sources'][0].get('url', '')
                         
                         if channel_url:
-                            f.write(f'#EXTINF:-1 tvg-id="{channel.get("id", "")}" tvg-name="{channel_name}" tvg-logo="{channel_image}" group-title="Canlı Yayınlar",{channel_name}\n')
+                            f.write(f'#EXTINF:-1 tvg-id="{channel.get("id", "")}" tvg-name="{channel_name}" tvg-logo="{channel_image}" group-title="CANLI - {category_name}",{channel_name}\n')
                             f.write(f"{channel_url}\n\n")
                 
-                # Film kategorileri
-                movie_categories = [
-                    (0, "Son Filmler"),
-                    (14, "Aile"),
-                    (1, "Aksiyon"),
-                    (13, "Animasyon"),
-                    (19, "Belgesel"),
-                    (4, "Bilim Kurgu"),
-                    (2, "Dram"),
-                    (10, "Fantastik"),
-                    (3, "Komedi"),
-                    (8, "Korku"),
-                    (17, "Macera"),
-                    (5, "Romantik")
-                ]
-                
-                for cat_id, cat_name in movie_categories:
-                    movies = get_movies(cat_id, cat_name)
-                    if movies:
-                        f.write(f"#EXTINF:-1 group-title=\"Filmler - {cat_name}\",{cat_name}\n")
-                        for movie in movies:
-                            if not movie.get('sources'):
-                                continue
-                                
-                            movie_name = movie.get('title', 'Unknown Movie')
-                            movie_image = movie.get('image', '')
-                            movie_url = movie['sources'][0].get('url', '')
-                            
-                            if movie_url:
-                                f.write(f'#EXTINF:-1 tvg-id="{movie.get("id", "")}" tvg-name="{movie_name}" tvg-logo="{movie_image}" group-title="Filmler - {cat_name}",{movie_name}\n')
-                                f.write(f"{movie_url}\n\n")
-                
-                # Diziler
-                series = get_series()
-                if series:
-                    f.write("#EXTINF:-1 group-title=\"Diziler\",Diziler\n")
-                    for serie in series:
-                        if not serie.get('id'):
+                # 2. FİLMLER (Kategorilere ayrılmış)
+                movies_by_category = get_movies_by_category()
+                for category_name, movies in movies_by_category.items():
+                    if not movies:
+                        continue
+                        
+                    f.write(f'#EXTINF:-1 group-title="FİLMLER - {category_name}",{category_name}\n')
+                    for movie in movies:
+                        if not movie.get('sources'):
                             continue
                             
-                        serie_name = serie.get('title', 'Unknown Serie')
-                        serie_image = serie.get('image', '')
+                        movie_name = movie['title']
+                        movie_image = movie.get('image', '')
+                        movie_url = movie['sources'][0].get('url', '')
                         
-                        # Dizi bölümlerini getir
-                        seasons_url = f"{MAIN_URL}/api/season/by/serie/{serie['id']}/{SW_KEY}/"
-                        seasons_data = fetch_url(seasons_url)
+                        if movie_url:
+                            f.write(f'#EXTINF:-1 tvg-id="{movie.get("id", "")}" tvg-name="{movie_name}" tvg-logo="{movie_image}" group-title="FİLMLER - {category_name}",{movie_name}\n')
+                            f.write(f"{movie_url}\n\n")
+                
+                # 3. DİZİLER (Kategorilere ve dizi adlarına göre ayrılmış)
+                series_by_category = get_series_by_category()
+                for category_name, series in series_by_category.items():
+                    if not series:
+                        continue
+                    
+                    f.write(f'#EXTINF:-1 group-title="DİZİLER - {category_name}",{category_name}\n')
+                    
+                    with ThreadPoolExecutor() as executor:
+                        futures = []
+                        for serie in series:
+                            if not serie.get('id'):
+                                continue
+                                
+                            futures.append(executor.submit(get_series_episodes, serie['id']))
                         
-                        if seasons_data and isinstance(seasons_data, list):
-                            for season in seasons_data:
+                        for future, serie in zip(as_completed(futures), series):
+                            episodes = future.result()
+                            if not episodes:
+                                continue
+                                
+                            serie_name = serie['title']
+                            serie_image = serie.get('image', '')
+                            
+                            for season in episodes:
                                 if not season.get('episodes'):
                                     continue
                                     
@@ -195,8 +267,8 @@ jobs:
                                         
                                     episode_url = episode['sources'][0].get('url', '')
                                     if episode_url:
-                                        episode_name = f"{serie_name} - {episode.get('title', 'Unknown Episode')}"
-                                        f.write(f'#EXTINF:-1 tvg-id="{episode.get("id", "")}" tvg-name="{episode_name}" tvg-logo="{serie_image}" group-title="Diziler",{episode_name}\n')
+                                        episode_name = f"{serie_name} - {episode.get('title', 'Bölüm')}"
+                                        f.write(f'#EXTINF:-1 tvg-id="{episode.get("id", "")}" tvg-name="{episode_name}" tvg-logo="{serie_image}" group-title="DİZİLER - {category_name}",{episode_name}\n')
                                         f.write(f"{episode_url}\n\n")
             
             print("\nPlaylist generation completed successfully!")
