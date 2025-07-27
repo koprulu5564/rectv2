@@ -80,27 +80,42 @@ jobs:
             return all_items
 
         def get_live_channels():
+            # Canlı yayın kategorileri ve API endpointleri
             live_categories = {
-                "Ulusal Kanallar": "${mainUrl}/api/channel/by/filtres/1/0/SAYFA/${swKey}/",
-                "Spor Kanalları": "${mainUrl}/api/channel/by/filtres/2/0/SAYFA/${swKey}/",
-                "Haber Kanalları": "${mainUrl}/api/channel/by/filtres/3/0/SAYFA/${swKey}/",
-                "Müzik Kanalları": "${mainUrl}/api/channel/by/filtres/4/0/SAYFA/${swKey}/",
-                "Sinema Kanalları": "${mainUrl}/api/channel/by/filtres/5/0/SAYFA/${swKey}/",
-                "Belgesel Kanalları": "${mainUrl}/api/channel/by/filtres/6/0/SAYFA/${swKey}/",
-                "Çocuk Kanalları": "${mainUrl}/api/channel/by/filtres/7/0/SAYFA/${swKey}/",
-                "Yerel Kanallar": "${mainUrl}/api/channel/by/filtres/8/0/SAYFA/${swKey}/"
+                "1": "Spor",
+                "2": "Haber",
+                "3": "Sinema",
+                "4": "Müzik",
+                "5": "Belgesel",
+                "6": "Çocuk",
+                "7": "Yerel",
+                "8": "Ulusal"
             }
             
             results = {}
             with ThreadPoolExecutor() as executor:
                 futures = []
-                for cat_name, url_template in live_categories.items():
-                    url = url_template.replace("${mainUrl}", MAIN_URL).replace("${swKey}", SW_KEY).replace("SAYFA", "0")
-                    base_url = url.rsplit('/', 2)[0] + "/"  # Sayfa numarası ve SW_KEY'den önceki kısım
+                for cat_id, cat_name in live_categories.items():
+                    base_url = f"{MAIN_URL}/api/channel/by/filtres/{cat_id}/0/"
                     futures.append(executor.submit(get_all_pages, base_url, f"CANLI - {cat_name}"))
                 
-                for future, cat_name in zip(as_completed(futures), live_categories.keys()):
-                    results[cat_name] = future.result()
+                for future, (cat_id, cat_name) in zip(as_completed(futures), live_categories.items()):
+                    channels = future.result()
+                    # API'den gelen kategori bilgilerini de kullan
+                    categorized_channels = {}
+                    for channel in channels:
+                        if not isinstance(channel, dict):
+                            continue
+                            
+                        # API'den gelen kategori varsa onu kullan, yoksa genel kategoriyi kullan
+                        api_cats = channel.get('categories', [])
+                        final_cat = api_cats[0]['title'] if api_cats and len(api_cats) > 0 else cat_name
+                        
+                        if final_cat not in categorized_channels:
+                            categorized_channels[final_cat] = []
+                        categorized_channels[final_cat].append(channel)
+                    
+                    results.update(categorized_channels)
             
             return results
 
@@ -183,13 +198,17 @@ jobs:
                             
                         name = channel.get('title', 'Unknown')
                         image = channel.get('image', '')
-                        url = channel['sources'][0].get('url', '')
+                        sources = [s for s in channel['sources'] if s.get('type') in ['m3u8', 'mp4']]
                         
-                        if url:
-                            f.write(f'#EXTINF:-1 tvg-id="{channel.get("id", "")}" tvg-name="{name}" tvg-logo="{image}" group-title="CANLI - {category}",{name}\n')
-                            f.write(f'#EXTVLCOPT:http-user-agent=googleusercontent\n')
-                            f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
-                            f.write(f"{url}\n\n")
+                        for source in sources:
+                            url = source.get('url', '')
+                            if url:
+                                quality = source.get('quality', '')
+                                source_name = f"{name} ({quality})" if quality else name
+                                f.write(f'#EXTINF:-1 tvg-id="{channel.get("id", "")}" tvg-name="{source_name}" tvg-logo="{image}" group-title="CANLI - {category}",{source_name}\n')
+                                f.write(f'#EXTVLCOPT:http-user-agent=googleusercontent\n')
+                                f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
+                                f.write(f"{url}\n\n")
                 
                 # 2. FİLMLER
                 print("\nProcessing Movies...")
@@ -205,7 +224,7 @@ jobs:
                             
                         name = movie.get('title', 'Unknown')
                         image = movie.get('image', '')
-                        url = movie['sources'][0].get('url', '')
+                        url = next((s.get('url', '') for s in movie['sources'] if s.get('type') in ['m3u8', 'mp4'] and s.get('url', ''))
                         
                         if url:
                             f.write(f'#EXTINF:-1 tvg-id="{movie.get("id", "")}" tvg-name="{name}" tvg-logo="{image}" group-title="FİLMLER - {category}",{name}\n')
@@ -246,7 +265,7 @@ jobs:
                                     if not isinstance(episode, dict) or not episode.get('sources'):
                                         continue
                                         
-                                    url = episode['sources'][0].get('url', '')
+                                    url = next((s.get('url', '') for s in episode['sources'] if s.get('type') in ['m3u8', 'mp4'] and s.get('url', '')), '')
                                     if url:
                                         ep_name = f"{serie_name} - {episode.get('title', 'Bölüm')}"
                                         f.write(f'#EXTINF:-1 tvg-id="{episode.get("id", "")}" tvg-name="{ep_name}" tvg-logo="{serie_image}" group-title="DİZİLER - {category}",{ep_name}\n')
