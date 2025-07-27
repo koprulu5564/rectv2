@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: '0 0 * * *' # Her gün saat 00:00'da çalışır
 
+env:
+  GITHUB_API_URL: "https://raw.githubusercontent.com/kerimmkirac/cs-kerim/dd1f10588d5d40f738f9e14fadd3e606ded7cb1c/RecTV/src/main/kotlin/com/keyiflerolsun/RecTV.kt"
+
 jobs:
   generate-m3u:
     runs-on: ubuntu-latest
@@ -28,48 +31,139 @@ jobs:
         cat << 'EOF' > generate_playlist.py
         import requests
         import datetime
+        import os
+        import re
         
-        # API base URL
-        BASE_URL = "https://api.example.com"  # API URL'sini buraya girin
+        def get_current_api_url():
+            """GitHub'dan güncel API URL'sini al"""
+            try:
+                response = requests.get(
+                    os.environ.get('GITHUB_API_URL'),
+                    timeout=10
+                )
+                response.raise_for_status()
+                
+                # Kotlin dosyasından mainUrl'yi regex ile bul
+                match = re.search(r'mainUrl\s*=\s*"([^"]+)"', response.text)
+                if match:
+                    return match.group(1)
+                return "https://m.prectv50.sbs"  # fallback URL
+            except:
+                return "https://m.prectv50.sbs"  # fallback URL
+        
+        def test_api_url(url):
+            """API URL'sinin çalışıp çalışmadığını test et"""
+            try:
+                response = requests.get(f"{url}/categories", timeout=10)
+                return response.status_code == 200
+            except:
+                return False
+        
+        def get_active_api_url():
+            """Çalışan API URL'sini belirle"""
+            current_url = get_current_api_url()
+            if test_api_url(current_url):
+                return current_url
+            
+            # Fallback URL'yi dene
+            fallback_url = "https://m.prectv50.sbs"
+            if test_api_url(fallback_url):
+                return fallback_url
+            
+            raise Exception("No working API URL found")
+        
+        BASE_URL = get_active_api_url()
+        print(f"Using API URL: {BASE_URL}")
+        
+        HEADERS = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json"
+        }
         
         def get_categories():
             """Tüm kategorileri getir"""
-            response = requests.get(f"{BASE_URL}/categories")
-            return response.json()
+            try:
+                response = requests.get(
+                    f"{BASE_URL}/categories",
+                    headers=HEADERS,
+                    timeout=10
+                )
+                response.raise_for_status()
+                return response.json().get('data', [])
+            except Exception as e:
+                print(f"Error getting categories: {e}")
+                return []
         
         def get_category_contents(category_id):
             """Kategori içeriklerini getir"""
-            response = requests.get(f"{BASE_URL}/categories/{category_id}/contents")
-            return response.json()
+            try:
+                response = requests.get(
+                    f"{BASE_URL}/categories/{category_id}/contents",
+                    headers=HEADERS,
+                    timeout=10
+                )
+                response.raise_for_status()
+                return response.json().get('data', [])
+            except Exception as e:
+                print(f"Error getting contents for category {category_id}: {e}")
+                return []
         
         def generate_m3u_playlist():
             """M3U playlist dosyası oluştur"""
+            print("Fetching categories...")
             categories = get_categories()
+            
+            if not categories:
+                print("No categories found or error occurred")
+                return
+            
+            print(f"Found {len(categories)} categories, generating playlist...")
             
             with open("playlist.m3u", "w", encoding="utf-8") as f:
                 # M3U başlık bilgisi
                 f.write("#EXTM3U\n")
-                f.write(f"# Generated at: {datetime.datetime.now()}\n\n")
+                f.write(f"# Generated at: {datetime.datetime.now()}\n")
+                f.write(f"# API Source: {BASE_URL}\n\n")
+                
+                total_contents = 0
                 
                 for category in categories:
+                    if not isinstance(category, dict):
+                        continue
+                        
                     # Kategori bilgileri
+                    category_id = category.get('id', '')
                     category_name = category.get('name', 'Unknown Category')
                     category_image = category.get('image', '')
                     
                     # Kategori başlığı
-                    f.write(f'#EXTINF:-1 tvg-id="{category["id"]}" tvg-name="{category_name}" tvg-logo="{category_image}" group-title="Categories",{category_name}\n')
+                    f.write(f'#EXTINF:-1 tvg-id="{category_id}" tvg-name="{category_name}" tvg-logo="{category_image}" group-title="Categories",{category_name}\n')
                     f.write(f"#EXTVLCOPT:http-user-agent=Mozilla/5.0\n\n")
                     
                     # Kategori içerikleri
-                    contents = get_category_contents(category["id"])
+                    print(f"Fetching contents for category: {category_name}...")
+                    contents = get_category_contents(category_id)
+                    
+                    if not contents:
+                        continue
+                    
                     for content in contents:
+                        if not isinstance(content, dict):
+                            continue
+                            
+                        content_id = content.get('id', '')
                         content_name = content.get('name', 'Unknown Content')
                         content_image = content.get('image', '')
                         content_url = content.get('url', '')
                         
                         if content_url:
-                            f.write(f'#EXTINF:-1 tvg-id="{content["id"]}" tvg-name="{content_name}" tvg-logo="{content_image}" group-title="{category_name}",{content_name}\n')
+                            f.write(f'#EXTINF:-1 tvg-id="{content_id}" tvg-name="{content_name}" tvg-logo="{content_image}" group-title="{category_name}",{content_name}\n')
                             f.write(f"{content_url}\n\n")
+                            total_contents += 1
+                    
+                    f.write("\n")
+                
+                print(f"Playlist generated with {total_contents} contents across {len(categories)} categories")
         
         if __name__ == "__main__":
             generate_m3u_playlist()
@@ -78,9 +172,10 @@ jobs:
         python generate_playlist.py
         
     - name: Commit and push changes
+      if: success()
       run: |
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         git add playlist.m3u
-        git commit -m "Update M3U playlist [auto]"
+        git diff --quiet && git diff --staged --quiet || git commit -m "Update M3U playlist [auto]"
         git push
