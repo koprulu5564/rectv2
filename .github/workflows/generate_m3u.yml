@@ -80,44 +80,29 @@ jobs:
             return all_items
 
         def get_live_channels():
-            # Canlı yayın kategorileri ve API endpointleri
-            live_categories = {
-                "1": "Spor",
-                "2": "Haber",
-                "3": "Sinema",
-                "4": "Müzik",
-                "5": "Belgesel",
-                "6": "Çocuk",
-                "7": "Yerel",
-                "8": "Ulusal"
-            }
+            print("\nFetching live channels with categories...")
+            base_url = f"{MAIN_URL}/api/channel/by/filtres/0/0/"
+            all_channels = get_all_pages(base_url, "Canlı Yayınlar")
             
-            results = {}
-            with ThreadPoolExecutor() as executor:
-                futures = []
-                for cat_id, cat_name in live_categories.items():
-                    base_url = f"{MAIN_URL}/api/channel/by/filtres/{cat_id}/0/"
-                    futures.append(executor.submit(get_all_pages, base_url, f"CANLI - {cat_name}"))
-                
-                for future, (cat_id, cat_name) in zip(as_completed(futures), live_categories.items()):
-                    channels = future.result()
-                    # API'den gelen kategori bilgilerini de kullan
-                    categorized_channels = {}
-                    for channel in channels:
-                        if not isinstance(channel, dict):
-                            continue
-                            
-                        # API'den gelen kategori varsa onu kullan, yoksa genel kategoriyi kullan
-                        api_cats = channel.get('categories', [])
-                        final_cat = api_cats[0]['title'] if api_cats and len(api_cats) > 0 else cat_name
-                        
-                        if final_cat not in categorized_channels:
-                            categorized_channels[final_cat] = []
-                        categorized_channels[final_cat].append(channel)
+            # API'den gelen kategori bilgilerine göre grupla
+            categories = {}
+            for channel in all_channels:
+                if not isinstance(channel, dict):
+                    continue
                     
-                    results.update(categorized_channels)
+                # API'den kategori bilgisini al
+                channel_categories = channel.get('categories', [])
+                if not channel_categories:
+                    category_name = "Diğer Kanallar"
+                else:
+                    category_name = channel_categories[0].get('title', 'Diğer Kanallar')
+                
+                if category_name not in categories:
+                    categories[category_name] = []
+                
+                categories[category_name].append(channel)
             
-            return results
+            return categories
 
         def get_movies():
             movie_categories = [
@@ -184,7 +169,7 @@ jobs:
                 f.write(f"# Generated at: {datetime.datetime.now()}\n")
                 f.write(f"# API Source: {MAIN_URL}\n\n")
                 
-                # 1. CANLI YAYINLAR
+                # 1. CANLI YAYINLAR (API'den gelen kategorilere göre)
                 print("\nProcessing Live Channels...")
                 live_data = get_live_channels()
                 for category, channels in live_data.items():
@@ -198,19 +183,15 @@ jobs:
                             
                         name = channel.get('title', 'Unknown')
                         image = channel.get('image', '')
-                        sources = [s for s in channel['sources'] if s.get('type') in ['m3u8', 'mp4']]
+                        url = channel['sources'][0].get('url', '')
                         
-                        for source in sources:
-                            url = source.get('url', '')
-                            if url:
-                                quality = source.get('quality', '')
-                                source_name = f"{name} ({quality})" if quality else name
-                                f.write(f'#EXTINF:-1 tvg-id="{channel.get("id", "")}" tvg-name="{source_name}" tvg-logo="{image}" group-title="CANLI - {category}",{source_name}\n')
-                                f.write(f'#EXTVLCOPT:http-user-agent=googleusercontent\n')
-                                f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
-                                f.write(f"{url}\n\n")
+                        if url:
+                            f.write(f'#EXTINF:-1 tvg-id="{channel.get("id", "")}" tvg-name="{name}" tvg-logo="{image}" group-title="CANLI - {category}",{name}\n')
+                            f.write(f'#EXTVLCOPT:http-user-agent=googleusercontent\n')
+                            f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
+                            f.write(f"{url}\n\n")
                 
-                # 2. FİLMLER
+                # 2. FİLMLER (Önceki mükemmel yapı korundu)
                 print("\nProcessing Movies...")
                 movie_data = get_movies()
                 for category, movies in movie_data.items():
@@ -224,7 +205,7 @@ jobs:
                             
                         name = movie.get('title', 'Unknown')
                         image = movie.get('image', '')
-                        url = next((s.get('url', '') for s in movie['sources'] if s.get('type') in ['m3u8', 'mp4'] and s.get('url', ''))
+                        url = movie['sources'][0].get('url', '')
                         
                         if url:
                             f.write(f'#EXTINF:-1 tvg-id="{movie.get("id", "")}" tvg-name="{name}" tvg-logo="{image}" group-title="FİLMLER - {category}",{name}\n')
@@ -232,7 +213,7 @@ jobs:
                             f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
                             f.write(f"{url}\n\n")
                 
-                # 3. DİZİLER
+                # 3. DİZİLER (Önceki mükemmel yapı korundu)
                 print("\nProcessing Series...")
                 series_data = get_series()
                 for category, series in series_data.items():
@@ -265,7 +246,7 @@ jobs:
                                     if not isinstance(episode, dict) or not episode.get('sources'):
                                         continue
                                         
-                                    url = next((s.get('url', '') for s in episode['sources'] if s.get('type') in ['m3u8', 'mp4'] and s.get('url', '')), '')
+                                    url = episode['sources'][0].get('url', '')
                                     if url:
                                         ep_name = f"{serie_name} - {episode.get('title', 'Bölüm')}"
                                         f.write(f'#EXTINF:-1 tvg-id="{episode.get("id", "")}" tvg-name="{ep_name}" tvg-logo="{serie_image}" group-title="DİZİLER - {category}",{ep_name}\n')
