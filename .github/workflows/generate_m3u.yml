@@ -74,9 +74,6 @@ jobs:
                     all_data.extend(data)
                     page += 1
                     pbar.update(1)
-                    
-                    # API'yi aşırı yüklememek için küçük bir bekleme
-                    # time.sleep(0.1)
             
             return all_data
 
@@ -91,7 +88,8 @@ jobs:
                 "Haber Kanalları": [],
                 "Müzik Kanalları": [],
                 "Yerel Kanallar": [],
-                "Çocuk Kanalları": []
+                "Çocuk Kanalları": [],
+                "Diğer Kanallar": []  # Hata çözümü: Diğer Kanallar kategorisi eklendi
             }
             
             # Tüm canlı yayınları getir
@@ -109,18 +107,20 @@ jobs:
                 # Kanal adına göre kategori belirle
                 if any(keyword in channel_name for keyword in ["TRT", "ATV", "FOX", "Kanal D", "Show TV", "Star", "TV8"]):
                     channel_group = "Ulusal Kanallar"
-                elif any(keyword in channel_name for keyword in ["Spor", "GS TV", "FB TV", "BJK TV"]):
+                elif any(keyword in channel_name for keyword in ["Spor", "GS TV", "FB TV", "BJK TV", "Bein"]):
                     channel_group = "Spor Kanalları"
                 elif any(keyword in channel_name for keyword in ["Sinema", "Film", "Dizi"]):
                     channel_group = "Sinema Kanalları"
                 elif any(keyword in channel_name for keyword in ["Belgesel", "Nat Geo", "Discovery"]):
                     channel_group = "Belgesel Kanalları"
-                elif any(keyword in channel_name for keyword in ["Haber", "CNN", "NTV", "HaberTürk"]):
+                elif any(keyword in channel_name for keyword in ["Haber", "CNN", "NTV", "HaberTürk", "TGRT"]):
                     channel_group = "Haber Kanalları"
                 elif any(keyword in channel_name for keyword in ["Müzik", "Kral", "Power", "Number One"]):
                     channel_group = "Müzik Kanalları"
-                elif any(keyword in channel_name for keyword in ["Çocuk", "Cartoon", "Minika"]):
+                elif any(keyword in channel_name for keyword in ["Çocuk", "Cartoon", "Minika", "Kidz"]):
                     channel_group = "Çocuk Kanalları"
+                elif any(keyword in channel_name for keyword in ["TV", "Kanalı", "Channel"]):
+                    channel_group = "Yerel Kanallar"
                 
                 categories[channel_group].append(channel)
             
@@ -212,6 +212,8 @@ jobs:
                         
                         if channel_url:
                             f.write(f'#EXTINF:-1 tvg-id="{channel.get("id", "")}" tvg-name="{channel_name}" tvg-logo="{channel_image}" group-title="CANLI - {category_name}",{channel_name}\n')
+                            f.write(f'#EXTVLCOPT:http-user-agent=googleusercontent\n')
+                            f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
                             f.write(f"{channel_url}\n\n")
                 
                 # 2. FİLMLER (Kategorilere ayrılmış)
@@ -231,6 +233,8 @@ jobs:
                         
                         if movie_url:
                             f.write(f'#EXTINF:-1 tvg-id="{movie.get("id", "")}" tvg-name="{movie_name}" tvg-logo="{movie_image}" group-title="FİLMLER - {category_name}",{movie_name}\n')
+                            f.write(f'#EXTVLCOPT:http-user-agent=googleusercontent\n')
+                            f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
                             f.write(f"{movie_url}\n\n")
                 
                 # 3. DİZİLER (Kategorilere ve dizi adlarına göre ayrılmış)
@@ -269,6 +273,8 @@ jobs:
                                     if episode_url:
                                         episode_name = f"{serie_name} - {episode.get('title', 'Bölüm')}"
                                         f.write(f'#EXTINF:-1 tvg-id="{episode.get("id", "")}" tvg-name="{episode_name}" tvg-logo="{serie_image}" group-title="DİZİLER - {category_name}",{episode_name}\n')
+                                        f.write(f'#EXTVLCOPT:http-user-agent=googleusercontent\n')
+                                        f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
                                         f.write(f"{episode_url}\n\n")
             
             print("\nPlaylist generation completed successfully!")
