@@ -102,11 +102,16 @@ jobs:
                 if category_name not in categories:
                     categories[category_name] = []
                 
-                # Sadece m3u8 kaynaklarını filtrele
-                m3u8_sources = [s for s in channel.get('sources', []) 
-                              if isinstance(s, dict) 
-                              and s.get('type') == 'm3u8' 
-                              and s.get('url')]
+                # Sadece m3u8 kaynaklarını filtrele ve gereksiz bilgileri temizle
+                m3u8_sources = []
+                for s in channel.get('sources', []):
+                    if isinstance(s, dict) and s.get('type') == 'm3u8' and s.get('url'):
+                        # Kaynak başlığını temizle (parantez içindekileri kaldır)
+                        clean_title = channel.get('title', 'Unknown').split('(')[0].strip()
+                        m3u8_sources.append({
+                            'url': s.get('url'),
+                            'clean_title': clean_title
+                        })
                 
                 if m3u8_sources:
                     channel['filtered_sources'] = m3u8_sources
@@ -192,7 +197,7 @@ jobs:
                             continue
                             
                         for source in channel['filtered_sources']:
-                            name = f"{channel.get('title', 'Unknown')} ({source.get('title', '')})"
+                            name = source['clean_title']  # Temizlenmiş başlık
                             image = channel.get('image', '')
                             url = source.get('url', '')
                             
@@ -224,7 +229,7 @@ jobs:
                             f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
                             f.write(f"{url}\n\n")
                 
-                # 3. DİZİLER
+                # 3. DİZİLER (Tekrar eden bölümler için düzenleme yapıldı)
                 print("\nProcessing Series...")
                 series_data = get_series()
                 for category, series in series_data.items():
@@ -240,6 +245,9 @@ jobs:
                                 continue
                                 
                             futures.append(executor.submit(get_episodes, serie['id']))
+                        
+                        # Tekrar eden bölümleri engellemek için kontrol
+                        added_episodes = set()
                         
                         for future, serie in zip(as_completed(futures), series):
                             episodes = future.result()
@@ -267,11 +275,16 @@ jobs:
                                         season_num = ''.join(filter(str.isdigit, season_title)) or '0'
                                         episode_num = ''.join(filter(str.isdigit, episode_title)) or '0'
                                         
-                                        ep_name = f"{serie_name} S{season_num}E{episode_num}"
-                                        f.write(f'#EXTINF:-1 tvg-id="{episode.get("id", "")}" tvg-name="{ep_name}" tvg-logo="{serie_image}" group-title="{category}",{ep_name}\n')
-                                        f.write(f'#EXTVLCOPT:http-user-agent=googleusercontent\n')
-                                        f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
-                                        f.write(f"{url}\n\n")
+                                        ep_id = f"{serie_name}-S{season_num}E{episode_num}"
+                                        
+                                        # Eğer bu bölüm daha önce eklenmediyse
+                                        if ep_id not in added_episodes:
+                                            added_episodes.add(ep_id)
+                                            ep_name = f"{serie_name} S{season_num}E{episode_num}"
+                                            f.write(f'#EXTINF:-1 tvg-id="{episode.get("id", "")}" tvg-name="{ep_name}" tvg-logo="{serie_image}" group-title="{category}",{ep_name}\n')
+                                            f.write(f'#EXTVLCOPT:http-user-agent=googleusercontent\n')
+                                            f.write(f'#EXTVLCOPT:http-referrer=https://twitter.com/\n')
+                                            f.write(f"{url}\n\n")
             
             print("\nPlaylist generation completed successfully!")
 
